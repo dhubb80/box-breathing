@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Breath Coach</title>
+    <title>Breath Coach v2</title>
     
     <link rel="manifest" href="manifest.json">
     <meta name="theme-color" content="#1a202c">
@@ -41,7 +41,6 @@
             box-sizing: border-box;
         }
 
-        /* Controls Section */
         .panel {
             background: var(--panel);
             padding: 20px;
@@ -53,7 +52,6 @@
 
         .panel h2 { margin-top: 0; text-align: center; margin-bottom: 20px;}
 
-        /* Grid for the 4 phases */
         .phase-grid {
             display: grid;
             grid-template-columns: 1fr 1fr;
@@ -61,10 +59,7 @@
             margin-bottom: 20px;
         }
 
-        .input-group {
-            display: flex;
-            flex-direction: column;
-        }
+        .input-group { display: flex; flex-direction: column; }
 
         label {
             font-size: 0.8rem;
@@ -85,10 +80,7 @@
             box-sizing: border-box;
         }
 
-        /* Full width inputs */
-        .full-width {
-            margin-bottom: 15px;
-        }
+        .full-width { margin-bottom: 15px; }
 
         button {
             background: var(--primary);
@@ -104,16 +96,10 @@
             -webkit-tap-highlight-color: transparent;
             margin-top: 10px;
         }
-
         button:hover { opacity: 0.9; }
 
-        button.stop {
-            background: #fc8181;
-            display: none;
-            margin-top: 20px;
-        }
+        button.stop { background: #fc8181; display: none; margin-top: 20px; }
 
-        /* Visualization Section */
         .visualizer {
             display: flex;
             justify-content: center;
@@ -135,10 +121,8 @@
             font-weight: bold;
             color: var(--primary);
             box-shadow: 0 0 25px rgba(79, 209, 197, 0.15);
-            /* Transition is handled via JS for variable speeds */
         }
 
-        /* Text & Status */
         .status-text {
             font-size: 1.8rem;
             height: 40px;
@@ -155,13 +139,7 @@
             font-size: 1.2rem;
         }
 
-        .summary-text {
-            font-size: 1.1rem;
-            line-height: 1.6;
-            margin-bottom: 25px;
-            color: #e2e8f0;
-        }
-
+        .summary-text { font-size: 1.1rem; line-height: 1.6; margin-bottom: 25px; color: #e2e8f0; }
         .hidden { display: none !important; }
 
         .active-indicator {
@@ -174,18 +152,9 @@
             right: 20px;
             display: none;
         }
-
-        /* Toggle Switch */
-        .toggle-row {
-            display: flex;
-            align-items: center;
-            margin-bottom: 15px;
-            cursor: pointer;
-        }
-        .toggle-row input {
-            width: auto;
-            margin-right: 10px;
-        }
+        
+        .toggle-row { display: flex; align-items: center; margin-bottom: 15px; cursor: pointer; }
+        .toggle-row input { width: auto; margin-right: 10px; }
     </style>
 </head>
 <body>
@@ -257,22 +226,209 @@
 </div>
 
 <script>
-    // --- PWA Service Worker ---
-    if ('serviceWorker' in navigator) {
-        window.addEventListener('load', () => {
-            navigator.serviceWorker.register('./sw.js').catch(() => {});
-        });
+    // --- State & Constants ---
+    const PRESETS = {
+        'box': [4, 4, 4, 4],
+        'sleep': [4, 7, 8, 0],   
+        'calm': [5, 5, 5, 5],    
+        'energy': [2, 2, 2, 2]   
+    };
+    
+    // --- Elements ---
+    const els = {
+        start: document.getElementById('startBtn'),
+        stop: document.getElementById('stopBtn'),
+        restart: document.getElementById('restartBtn'),
+        preset: document.getElementById('presetSelect'),
+        inputs: [
+            document.getElementById('tInhale'),
+            document.getElementById('tHold1'),
+            document.getElementById('tExhale'),
+            document.getElementById('tHold2')
+        ],
+        total: document.getElementById('totalMinutes'),
+        audio: document.getElementById('audioToggle'),
+        panels: {
+            setup: document.getElementById('controlsPanel'),
+            summary: document.getElementById('summaryPanel'),
+            vis: document.getElementById('visualizerPanel')
+        },
+        display: {
+            text: document.getElementById('instructionText'),
+            msg: document.getElementById('summaryMessage'),
+            timer: document.getElementById('totalTimer'),
+            box: document.getElementById('breathingBox'),
+            led: document.getElementById('wakeLockIndicator')
+        }
+    };
+
+    let state = {
+        interval: null,
+        timeout: null,
+        timeLeft: 0,
+        running: false,
+        audioCtx: null,
+        startTime: 0,
+        wakeLock: null,
+        phases: []
+    };
+
+    // --- Logic ---
+    
+    // Apply Preset Values to Inputs
+    function applyPreset(key) {
+        if (key !== 'custom' && PRESETS[key]) {
+            const values = PRESETS[key];
+            els.inputs[0].value = values[0];
+            els.inputs[1].value = values[1];
+            els.inputs[2].value = values[2];
+            els.inputs[3].value = values[3];
+        }
     }
 
-    // --- Elements ---
-    const startBtn = document.getElementById('startBtn');
-    const stopBtn = document.getElementById('stopBtn');
-    const restartBtn = document.getElementById('restartBtn');
-    const presetSelect = document.getElementById('presetSelect');
+    // Event Listeners
+    els.preset.addEventListener('change', (e) => applyPreset(e.target.value));
     
-    // Inputs
-    const tInhale = document.getElementById('tInhale');
-    const tHold1 = document.getElementById('tHold1');
-    const tExhale = document.getElementById('tExhale');
-    const tHold2 = document.getElementById('tHold2');
-    const inputTotal = document.getElementById('totalMinutes');
+    // If user types manually, switch dropdown to Custom
+    els.inputs.forEach(input => {
+        input.addEventListener('input', () => els.preset.value = 'custom');
+    });
+
+    els.start.addEventListener('click', startSession);
+    els.stop.addEventListener('click', endSession);
+    els.restart.addEventListener('click', () => {
+        els.panels.summary.classList.add('hidden');
+        els.panels.setup.classList.remove('hidden');
+    });
+
+    // --- Start / Stop ---
+    async function startSession() {
+        initAudio(); 
+        await requestWakeLock();
+
+        // Capture values from inputs
+        state.phases = els.inputs.map(input => (parseInt(input.value) || 0) * 1000);
+        
+        state.timeLeft = (parseInt(els.total.value) || 2) * 60;
+        state.startTime = Date.now();
+
+        // Switch UI
+        els.panels.setup.classList.add('hidden');
+        els.panels.summary.classList.add('hidden');
+        els.panels.vis.classList.remove('hidden');
+        els.display.text.classList.remove('hidden');
+        els.display.timer.classList.remove('hidden');
+        els.stop.classList.remove('hidden');
+        els.stop.style.display = 'block';
+        
+        els.display.box.style.width = '60px';
+        els.display.box.style.height = '60px';
+        els.display.box.style.transition = 'none';
+
+        state.running = true;
+        updateTimer();
+        
+        state.interval = setInterval(() => {
+            state.timeLeft--;
+            updateTimer();
+            if (state.timeLeft <= 0) endSession();
+        }, 1000);
+
+        runPhase(0);
+    }
+
+    function endSession() {
+        if (!state.running) return;
+        state.running = false;
+        clearInterval(state.interval);
+        clearTimeout(state.timeout);
+        releaseWakeLock();
+
+        const elapsed = Date.now() - state.startTime;
+        const m = Math.floor(elapsed / 60000);
+        const s = Math.floor((elapsed % 60000) / 1000);
+        
+        let patternName = els.preset.value !== 'custom' 
+            ? els.preset.options[els.preset.selectedIndex].text 
+            : "Custom Pattern";
+
+        els.display.msg.innerHTML = `<strong>${patternName}</strong><br>Total Time: ${m}m ${s}s`;
+
+        els.panels.vis.classList.add('hidden');
+        els.display.text.classList.add('hidden');
+        els.display.timer.classList.add('hidden');
+        els.stop.classList.add('hidden');
+        
+        els.panels.summary.classList.remove('hidden');
+    }
+
+    // --- Breathing Engine ---
+    function runPhase(idx) {
+        if (!state.running) return;
+        const duration = state.phases[idx];
+        
+        if (duration <= 0) {
+            runPhase((idx + 1) % 4);
+            return;
+        }
+
+        const labels = ["INHALE", "HOLD", "EXHALE", "HOLD"];
+        const sizes = [260, 260, 60, 60];
+        const colors = ["rgba(79, 209, 197, 0.1)", "rgba(79, 209, 197, 0.1)", "transparent", "transparent"];
+
+        els.display.text.innerText = labels[idx];
+        playCue(idx === 0); // Inhale sound vs others
+        
+        els.display.box.style.transition = `all ${duration}ms linear`;
+        
+        requestAnimationFrame(() => {
+            els.display.box.style.width = `${sizes[idx]}px`;
+            els.display.box.style.height = `${sizes[idx]}px`;
+            els.display.box.style.backgroundColor = colors[idx];
+        });
+
+        state.timeout = setTimeout(() => runPhase((idx + 1) % 4), duration);
+    }
+
+    // --- Utils ---
+    function updateTimer() {
+        const m = Math.floor(state.timeLeft / 60);
+        const s = state.timeLeft % 60;
+        els.display.timer.innerText = `${m}:${s < 10 ? '0' : ''}${s}`;
+    }
+
+    // Audio
+    function initAudio() {
+        const AC = window.AudioContext || window.webkitAudioContext;
+        if (!state.audioCtx && AC) state.audioCtx = new AC();
+        if (state.audioCtx && state.audioCtx.state === 'suspended') state.audioCtx.resume();
+    }
+    function playCue(isInhale) {
+        if (!els.audio.checked || !state.audioCtx) return;
+        const osc = state.audioCtx.createOscillator();
+        const g = state.audioCtx.createGain();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(isInhale ? 300 : 400, state.audioCtx.currentTime);
+        osc.frequency.linearRampToValueAtTime(isInhale ? 400 : 300, state.audioCtx.currentTime + 0.1);
+        g.gain.setValueAtTime(0.1, state.audioCtx.currentTime);
+        g.gain.exponentialRampToValueAtTime(0.01, state.audioCtx.currentTime + 0.3);
+        osc.connect(g); g.connect(state.audioCtx.destination);
+        osc.start(); osc.stop(state.audioCtx.currentTime + 0.35);
+    }
+
+    // Wake Lock
+    async function requestWakeLock() {
+        try { if ('wakeLock' in navigator) { state.wakeLock = await navigator.wakeLock.request('screen'); els.display.led.style.display='block'; } } catch(e){}
+    }
+    async function releaseWakeLock() {
+        if (state.wakeLock) { await state.wakeLock.release(); state.wakeLock = null; els.display.led.style.display='none'; }
+    }
+    document.addEventListener('visibilitychange', () => {
+        if (state.wakeLock && document.visibilityState === 'visible' && state.running) requestWakeLock();
+    });
+
+    // --- PWA Init ---
+    if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js');
+</script>
+</body>
+</html>
