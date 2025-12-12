@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Box Breathing Coach</title>
+    
+    <link rel="manifest" href="manifest.json">
+    <meta name="theme-color" content="#1a202c">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <link rel="apple-touch-icon" href="icon.png">
+
+    <style>
+        :root {
+            --primary: #4fd1c5;
+            --bg: #1a202c;
+            --text: #e2e8f0;
+            --panel: #2d3748;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--bg);
+            color: var(--text);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            margin: 0;
+            overscroll-behavior: none; /* Prevents bounce on mobile */
+        }
+
+        .container {
+            text-align: center;
+            max-width: 400px;
+            width: 100%;
+            padding: 20px;
+            box-sizing: border-box;
+        }
+
+        /* Controls Section */
+        .panel {
+            background: var(--panel);
+            padding: 20px;
+            border-radius: 12px;
+            margin-bottom: 40px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+        }
+
+        .input-group {
+            margin-bottom: 15px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        label {
+            font-size: 0.9rem;
+            color: #a0aec0;
+        }
+
+        input[type="number"] {
+            background: var(--bg);
+            border: 1px solid #4a5568;
+            color: white;
+            padding: 8px;
+            border-radius: 6px;
+            width: 60px;
+            text-align: center;
+            font-size: 16px; /* Prevents iOS zoom on focus */
+        }
+
+        button {
+            background: var(--primary);
+            color: var(--bg);
+            border: none;
+            padding: 12px 24px;
+            border-radius: 6px;
+            font-weight: bold;
+            cursor: pointer;
+            font-size: 1rem;
+            width: 100%;
+            transition: opacity 0.2s;
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        button:hover { opacity: 0.9; }
+
+        button.stop {
+            background: #fc8181;
+            display: none;
+        }
+
+        /* Visualization Section */
+        .visualizer {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 300px;
+            position: relative;
+        }
+
+        .box {
+            width: 50px;
+            height: 50px;
+            background-color: transparent;
+            border: 4px solid var(--primary);
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.2rem;
+            font-weight: bold;
+            color: var(--primary);
+            transition-property: width, height, background-color;
+            box-shadow: 0 0 20px rgba(79, 209, 197, 0.2);
+        }
+
+        /* Text & Status */
+        .status-text {
+            font-size: 1.5rem;
+            margin-top: 20px;
+            height: 30px;
+            font-weight: 600;
+            letter-spacing: 1px;
+        }
+
+        .timer-display {
+            margin-top: 10px;
+            color: #a0aec0;
+            font-variant-numeric: tabular-nums;
+        }
+
+        .summary-text {
+            font-size: 1.1rem;
+            line-height: 1.5;
+            margin-bottom: 20px;
+        }
+
+        .hidden { display: none !important; }
+
+        .active-indicator {
+            width: 8px;
+            height: 8px;
+            background-color: #48bb78;
+            border-radius: 50%;
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            display: none;
+        }
+    </style>
+</head>
+<body>
+
+<div class="active-indicator" id="wakeLockIndicator" title="Screen Active"></div>
+
+<div class="container">
+    
+    <div class="panel" id="controlsPanel">
+        <h2 style="margin-top:0;">Box Breathing</h2>
+        <div class="input-group">
+            <label for="phaseTime">Phase Duration (sec)</label>
+            <input type="number" id="phaseTime" value="4" min="2" max="10">
+        </div>
+        <div class="input-group">
+            <label for="totalMinutes">Total Time (min)</label>
+            <input type="number" id="totalMinutes" value="2" min="1" max="60">
+        </div>
+        <div style="text-align: left; margin-bottom: 15px;">
+            <label style="display:flex; align-items:center;">
+                <input type="checkbox" id="audioToggle" checked style="width:auto; margin-right: 10px;"> 
+                Enable Audio Cues
+            </label>
+        </div>
+        <button id="startBtn">Start Session</button>
+    </div>
+
+    <div class="panel hidden" id="summaryPanel">
+        <h2 style="margin-top:0;">Session Complete</h2>
+        <p class="summary-text" id="summaryMessage"></p>
+        <button id="restartBtn">New Session</button>
+    </div>
+
+    <div class="visualizer hidden" id="visualizerPanel">
+        <div class="box" id="breathingBox"></div>
+    </div>
+    
+    <div class="status-text hidden" id="instructionText">Prepare...</div>
+    <div class="timer-display hidden" id="totalTimer">00:00</div>
+    
+    <button id="stopBtn" class="stop hidden" style="margin-top: 20px;">End Session</button>
+</div>
+
+<script>
+    // --- PWA Service Worker Registration ---
+    if ('serviceWorker' in navigator) {
+        window.addEventListener('load', () => {
+            navigator.serviceWorker.register('./sw.js')
+                .then(reg => console.log('SW registered'))
+                .catch(err => console.log('SW failed', err));
+        });
+    }
+
+    // --- Elements ---
+    const startBtn = document.getElementById('startBtn');
+    const stopBtn = document.getElementById('stopBtn');
+    const restartBtn = document.getElementById('restartBtn');
+    const controlsPanel = document.getElementById('controlsPanel');
+    const summaryPanel = document.getElementById('summaryPanel');
+    const visualizerPanel = document.getElementById('visualizerPanel');
+    const instructionText = document.getElementById('instructionText');
+    const summaryMessage = document.getElementById('summaryMessage');
+    const totalTimerDisplay = document.getElementById('totalTimer');
+    const box = document.getElementById('breathingBox');
+    const wakeLockIndicator = document.getElementById('wakeLockIndicator');
+    const inputPhase = document.getElementById('phaseTime');
+    const inputTotal = document.getElementById('totalMinutes');
+    const audioToggle = document.getElementById('audioToggle');
+
+    // --- State ---
+    let sessionInterval, breathTimeout;
+    let totalSecondsLeft, phaseDurationMs, phaseDurationSec; 
+    let isRunning = false;
+    let audioCtx = null;
+    let startTime; 
+    let wakeLock = null;
+
+    const MAX_SIZE = 250;
+    const MIN_SIZE = 50;
+
+    // --- Event Listeners ---
+    startBtn.addEventListener('click', startSession);
+    stopBtn.addEventListener('click', endSession);
+    restartBtn.addEventListener('click', () => {
+        summaryPanel.classList.add('hidden');
+        controlsPanel.classList.remove('hidden');
+    });
+    
+    document.addEventListener('visibilitychange', async () => {
+        if (wakeLock !== null && document.visibilityState === 'visible' && isRunning) {
+            await requestWakeLock();
+        }
+    });
+
+    // --- Wake Lock ---
+    async function requestWakeLock() {
+        try {
+            if ('wakeLock' in navigator) {
+                wakeLock = await navigator.wakeLock.request('screen');
+                wakeLockIndicator.style.display = 'block';
+            }
+        } catch (err) { console.log('Wake Lock err:', err); }
+    }
+    async function releaseWakeLock() {
+        if (wakeLock !== null) {
+            await wakeLock.release();
+            wakeLock = null;
+            wakeLockIndicator.style.display = 'none';
+        }
+    }
+
+    // --- Audio ---
+    function initAudio() {
+        if (!audioCtx) {
+            const AudioContext = window.AudioContext || window.webkitAudioContext;
+            audioCtx = new AudioContext();
+        }
+        if (audioCtx.state === 'suspended') audioCtx.resume();
+    }
+    function playCue() {
+        if (!audioToggle.checked || !audioCtx) return;
+        const osc = audioCtx.createOscillator();
+        const gainNode = audioCtx.createGain();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(440, audioCtx.currentTime); 
+        osc.frequency.exponentialRampToValueAtTime(300, audioCtx.currentTime + 0.1);
+        gainNode.gain.setValueAtTime(0.1, audioCtx.currentTime); 
+        gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.1);
+        osc.connect(gainNode);
+        gainNode.connect(audioCtx.destination);
+        osc.start();
+        osc.stop(audioCtx.currentTime + 0.15);
+    }
+
+    // --- Core Logic ---
+    async function startSession() {
+        initAudio(); 
+        await requestWakeLock();
+        
+        phaseDurationSec = parseInt(inputPhase.value) || 4;
+        const totalMin = parseInt(inputTotal.value) || 2;
+        phaseDurationMs = phaseDurationSec * 1000;
+        totalSecondsLeft = totalMin * 60;
+        startTime = Date.now();
+
+        controlsPanel.classList.add('hidden');
+        summaryPanel.classList.add('hidden');
+        visualizerPanel.classList.remove('hidden');
+        instructionText.classList.remove('hidden');
+        totalTimerDisplay.classList.remove('hidden');
+        stopBtn.classList.remove('hidden');
+        stopBtn.style.display = 'block';
+        box.style.transitionDuration = `${phaseDurationSec}s`;
+
+        isRunning = true;
+        updateTimerDisplay();
+        
+        sessionInterval = setInterval(() => {
+            totalSecondsLeft--;
+            updateTimerDisplay();
+            if (totalSecondsLeft <= 0) endSession();
+        }, 1000);
+
+        runBreathingCycle();
+    }
+
+    function endSession() {
+        if (!isRunning) return;
+        isRunning = false;
+        clearInterval(sessionInterval);
+        clearTimeout(breathTimeout);
+        releaseWakeLock();
+
+        const elapsedMs = Date.now() - startTime;
+        const elapsedMinutes = Math.floor(elapsedMs / 60000);
+        const elapsedSeconds = Math.floor((elapsedMs % 60000) / 1000);
+        
+        let timeString = elapsedMinutes > 0 
+            ? `${elapsedMinutes} minute${elapsedMinutes > 1 ? 's' : ''}` + (elapsedSeconds > 0 ? ` and ${elapsedSeconds} seconds` : '')
+            : `${elapsedSeconds} seconds`;
+
+        summaryMessage.innerText = `Box breathing in ${phaseDurationSec} second phases for ${timeString}.`;
+
+        visualizerPanel.classList.add('hidden');
+        instructionText.classList.add('hidden');
+        totalTimerDisplay.classList.add('hidden');
+        stopBtn.classList.add('hidden');
+        stopBtn.style.display = 'none';
+        
+        box.style.width = `${MIN_SIZE}px`;
+        box.style.height = `${MIN_SIZE}px`;
+        box.style.backgroundColor = 'transparent';
+        instructionText.innerText = "Prepare...";
+        summaryPanel.classList.remove('hidden');
+    }
+
+    function updateTimerDisplay() {
+        const m = Math.floor(totalSecondsLeft / 60);
+        const s = totalSecondsLeft % 60;
+        totalTimerDisplay.innerText = `${m}:${s < 10 ? '0' : ''}${s}`;
+    }
+
+    function runBreathingCycle() {
+        if (!isRunning) return;
+        const doPhase = (text, size, isFill, nextCb) => {
+            if (!isRunning) return;
+            instructionText.innerText = text;
+            playCue(); 
+            if (isFill !== null) {
+                box.style.width = `${size}px`;
+                box.style.height = `${size}px`;
+                box.style.backgroundColor = text === "INHALE" ? "rgba(79, 209, 197, 0.1)" : "transparent";
+            }
+            breathTimeout = setTimeout(nextCb, phaseDurationMs);
+        };
+
+        doPhase("INHALE", MAX_SIZE, true, () => {
+            doPhase("HOLD", MAX_SIZE, false, () => {
+                doPhase("EXHALE", MIN_SIZE, true, () => {
+                    doPhase("HOLD", MIN_SIZE, false, () => {
+                        runBreathingCycle();
+                    });
+                });
+            });
+        });
+    }
+</script>
+</body>
+</html>
